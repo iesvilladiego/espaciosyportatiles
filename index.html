@@ -36,6 +36,11 @@ h1,h2,h3{line-height:1.25}
 .brand .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#2563eb,#0d9488);display:grid;place-items:center;color:#fff;flex:none}
 .brand b{color:#f1f5f9;font-size:14px;display:block;line-height:1.2}
 .brand small{color:#64748b;font-size:10.5px;display:block;margin-top:2px}
+/* Chip de versión junto al título: lo rellena el JS preguntando al SW */
+.brand .trow{display:flex;align-items:center;gap:7px;min-width:0}
+.brand .trow b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vchip{flex:none;font-size:10px;font-weight:600;letter-spacing:.4px;color:#5eead4;background:rgba(13,148,136,.18);border:1px solid rgba(45,212,191,.35);padding:2px 8px;border-radius:999px;line-height:1.4;max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
+.vchip[hidden]{display:none}
 #nav{padding:10px;display:flex;flex-direction:column;gap:2px;flex:1}
 .nav-btn{display:flex;gap:11px;align-items:center;padding:9px 12px;border-radius:9px;color:#94a3b8;cursor:pointer;border:0;background:none;text-align:left;width:100%;font-size:13.5px;font-weight:500}
 .nav-btn:hover{background:#16213a;color:#e2e8f0}
@@ -450,7 +455,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   <aside id="sidebar">
     <div class="brand">
       <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-6h6v6"/></svg></div>
-      <div><b>Reserva de Espacios</b><small id="brand-sub">Centro educativo</small></div>
+      <div class="btitle"><div class="trow"><b>Reserva de Espacios</b><span class="vchip" id="ver-chip" hidden title="Versión de la aplicación"></span></div><small id="brand-sub">Centro educativo</small></div>
     </div>
     <nav id="nav">
       <button class="nav-btn" data-view="hoy"></button>
@@ -3305,9 +3310,58 @@ function buildNav(){
   var btn=document.getElementById('btn-install');
   var deferred=null;
   var DL='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  /* ---- Chip de versión del menú lateral: la versión vive en sw.js (CACHE_VERSION) ---- */
+  function setVerChip(v){
+    var el=document.getElementById('ver-chip');
+    if(!el||!v)return;
+    el.textContent=v;
+    el.title='Versión de la aplicación: '+v;
+    el.hidden=false;
+  }
+  /* 1) Pedírsela al SW activo por MessageChannel (respuesta directa e inmediata) */
+  function askSwVersion(worker){
+    return new Promise(function(resolve){
+      if(!worker||!window.MessageChannel){resolve(null);return}
+      var ch=new MessageChannel(),done=false;
+      var t=setTimeout(function(){if(!done){done=true;resolve(null)}},1200);
+      ch.port1.onmessage=function(e){
+        if(done)return;done=true;clearTimeout(t);
+        resolve(e&&e.data&&e.data.version?e.data.version:null);
+      };
+      try{worker.postMessage({type:'GET_VERSION'},[ch.port2])}
+      catch(_){if(!done){done=true;clearTimeout(t);resolve(null)}}
+    });
+  }
+  /* 2) Plan B (sin SW, SW antiguo sin manejador o sin respuesta):
+        pedir sw.js en fresco y extraer CACHE_VERSION */
+  function versionFromSwFile(){
+    return fetch('sw.js',{cache:'no-store'}).then(function(r){return r.ok?r.text():''}).then(function(t){
+      var m=/CACHE_VERSION\s*=\s*['"]([^'"]+)['"]/.exec(t||'');
+      return m?m[1]:null;
+    }).catch(function(){return null});
+  }
+  function loadVerChip(){
+    if(!('serviceWorker' in navigator)){versionFromSwFile().then(setVerChip);return}
+    /* Si el registro del SW falló, ready nunca resuelve: red de seguridad a los 3 s */
+    var safety=setTimeout(function(){
+      var el=document.getElementById('ver-chip');
+      if(el&&el.hidden)versionFromSwFile().then(setVerChip);
+    },3000);
+    navigator.serviceWorker.ready.then(function(reg){
+      return askSwVersion(reg.active||navigator.serviceWorker.controller);
+    }).then(function(v){
+      return v||versionFromSwFile();
+    }).then(function(v){
+      clearTimeout(safety);
+      if(v)setVerChip(v);
+    }).catch(function(){versionFromSwFile().then(setVerChip)});
+  }
   if('serviceWorker' in navigator){
     window.addEventListener('load',function(){
       navigator.serviceWorker.register('sw.js').catch(function(){/* p. ej. abierto con file:// o sin sw.js junto al HTML */});
+      loadVerChip();
+      /* Cuando una versión nueva del SW tome el control, refrescar el chip */
+      navigator.serviceWorker.addEventListener('controllerchange',loadVerChip);
     });
   }
   window.addEventListener('beforeinstallprompt',function(e){
