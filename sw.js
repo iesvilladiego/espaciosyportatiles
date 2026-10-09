@@ -12,6 +12,8 @@
      revalidate (caché primero + actualización en segundo plano).
    - Los DATOS de Firebase Realtime Database (firebasedatabase.app
      / firebaseio.com) NUNCA se cachean: siempre red en vivo.
+   - GET_VERSION: la página le pide al SW su versión (CACHE_VERSION)
+     para mostrarla en un chip del menú lateral de la app.
    Para publicar una versión nueva, sube CACHE_VERSION.
    ============================================================ */
 'use strict';
@@ -76,6 +78,17 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+/* ----------------------------------------------------------------
+   Chip de versión del menú lateral: la página pregunta al SW por su
+   versión con {type:'GET_VERSION'} y se responde (preferentemente por
+   el MessageChannel que llega en event.ports) con CACHE_VERSION. */
+self.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.type !== 'GET_VERSION') return;
+  const reply = { type: 'VERSION', version: CACHE_VERSION };
+  if (event.ports && event.ports[0]) event.ports[0].postMessage(reply);
+  else if (event.source) event.source.postMessage(reply);
+});
 /* Página «Sin conexión» de reserva */
 const offlineResponse = () => new Response(
   '<!doctype html><html lang="es"><head><meta charset="utf-8">' +
@@ -100,6 +113,10 @@ self.addEventListener('fetch', (event) => {
 
   const sameOrigin = url.origin === self.location.origin;
   if (!sameOrigin && !CDN_HOSTS.has(url.hostname)) return;
+
+  /* El propio sw.js no se intercepta ni se cachea: la página lo pide en
+     fresco (cache:'no-store') para leer CACHE_VERSION y pintar el chip. */
+  if (sameOrigin && /\/sw\.js$/.test(url.pathname)) return;
 
   /* 1) Navegaciones: red primero → caché → página sin conexión.
         Cada URL se guarda con su contenido; sin red se sirve la
